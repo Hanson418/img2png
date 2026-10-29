@@ -748,6 +748,74 @@ static void make_icc(uint8_t *icc, size_t len, const char *tag4)
         memcpy(icc + 4, tag4, 4);
 }
 
+/* CRC-32 (PNG chunk checksums) without pulling zlib into the test */
+static uint32_t test_crc32(const uint8_t *p, size_t n)
+{
+    uint32_t c = 0xFFFFFFFFu;
+    for (size_t i = 0; i < n; i++) {
+        c ^= p[i];
+        for (int k = 0; k < 8; k++)
+            c = (c >> 1) ^ (0xEDB88320u & (uint32_t)(-(int32_t)(c & 1)));
+    }
+    return c ^ 0xFFFFFFFFu;
+}
+
+/* Rewrite a PNG in memory so its eXIf payload carries the JPEG-style
+ * "Exif\0\0" identifier - the non-conformant form some writers emit and that
+ * libpng therefore rejects.  Every other chunk is copied verbatim. */
+static uint8_t *png_prefix_exif(const uint8_t *src, size_t slen, size_t *outlen)
+{
+    static const uint8_t sig[8] = { 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A };
+    if (slen < 8 || memcmp(src, sig, 8) != 0)
+        return NULL;
+    uint8_t *out = (uint8_t *)malloc(slen + 16);
+    if (!out)
+        return NULL;
+    memcpy(out, src, 8);
+    size_t n = 8, pos = 8;
+    while (pos + 12 <= slen) {
+        uint32_t len = ((uint32_t)src[pos] << 24) | ((uint32_t)src[pos + 1] << 16) |
+                       ((uint32_t)src[pos + 2] << 8) | (uint32_t)src[pos + 3];
+        const uint8_t *type = src + pos + 4;
+        if (pos + 12 + (size_t)len > slen) {
+            free(out);
+            return NULL;
+        }
+        if (!memcmp(type, "eXIf", 4)) {
+            size_t nlen = (size_t)len + 6;
+            uint8_t *body = (uint8_t *)malloc(nlen);
+            uint8_t *full = (uint8_t *)malloc(nlen + 4);
+            if (!body || !full) {
+                free(body);
+                free(full);
+                free(out);
+                return NULL;
+            }
+            memcpy(body, "Exif\0\0", 6);
+            memcpy(body + 6, src + pos + 8, len);
+            memcpy(full, "eXIf", 4);
+            memcpy(full + 4, body, nlen);
+            uint32_t crc = test_crc32(full, nlen + 4);
+            out[n++] = (uint8_t)(nlen >> 24); out[n++] = (uint8_t)(nlen >> 16);
+            out[n++] = (uint8_t)(nlen >> 8);  out[n++] = (uint8_t)nlen;
+            memcpy(out + n, full, nlen + 4);
+            n += nlen + 4;
+            out[n++] = (uint8_t)(crc >> 24); out[n++] = (uint8_t)(crc >> 16);
+            out[n++] = (uint8_t)(crc >> 8);  out[n++] = (uint8_t)crc;
+            free(body);
+            free(full);
+        } else {
+            memcpy(out + n, src + pos, 12 + (size_t)len);
+            n += 12 + (size_t)len;
+        }
+        pos += 12 + (size_t)len;
+        if (!memcmp(type, "IEND", 4))
+            break;
+    }
+    *outlen = n;
+    return out;
+}
+
 /* substring search over binary data (EXIF payloads are full of NULs) */
 static int contains_bytes(const uint8_t *hay, size_t hlen, const char *needle)
 {
@@ -2597,6 +2665,84 @@ pgm_done:;
                       "all three carried into the PNG");
             } else {
                 CHECK(0, "read back webp metadata");
+            }
+        }
+    }
+
+    printf("Metadata: non-conformant eXIf (JPEG-style identifier) recovered:\n");
+    {
+        uint8_t exif[512];
+        size_t exif_len = make_exif(exif, sizeof(exif));
+
+        /* a conformant PNG carrying EXIF ... */
+        img_image_t src;
+        memset(&src, 0, sizeof(src));
+        src.width = 4; src.height = 2; src.color = IMG_RGB; src.bit_depth = 8;
+        src.rowstride = img_rowstride(4, 8, 3);
+        src.data = (uint8_t *)calloc(2, src.rowstride);
+        for (int y = 0; y < 2; y++)
+            for (int x = 0; x < 4; x++) {
+                put_sample(&src, x, y, 0, (unsigned)(x * 50));
+                put_sample(&src, x, y, 1, (unsigned)(y * 90));
+                put_sample(&src, x, y, 2, 11);
+            }
+        img_meta_set_exif(&src.meta, exif, exif_len);
+        CHECK(png_write_file(&src, &opts, "testout/exif_norm.png",
+                             err, sizeof(err)) == 0, "write conformant png");
+        img_free(&src);
+
+        long n = -1;
+        uint8_t *buf = NULL;
+        FILE *f = img_fopen_read("testout/exif_norm.png");
+        if (f) {
+            fseek(f, 0, SEEK_END); n = ftell(f); rewind(f);
+            buf = (uint8_t *)malloc((size_t)n);
+            if (!buf || fread(buf, 1, (size_t)n, f) != (size_t)n) { free(buf); buf = NULL; }
+            fclose(f);
+        }
+        size_t plen = 0;
+        uint8_t *pref = buf ? png_prefix_exif(buf, (size_t)n, &plen) : NULL;
+        free(buf);
+        CHECK(pref != NULL, "build non-conformant variant");
+        if (pref) {
+            FILE *w = img_fopen_write("testout/exif_prefix.png");
+            int okw = w && fwrite(pref, 1, plen, w) == plen;
+            if (w) fclose(w);
+            free(pref);
+            CHECK(okw, "write non-conformant png");
+
+            /* baseline: libpng on its own drops the chunk */
+            png_meta_t pm;
+            if (read_png_meta("testout/exif_prefix.png", &pm) == 0)
+                CHECK(pm.exif_len == 0, "libpng alone drops it (baseline)");
+
+            FILE *rf = img_fopen_read("testout/exif_prefix.png");
+            long rn = -1;
+            uint8_t *rb = NULL;
+            if (rf) {
+                fseek(rf, 0, SEEK_END); rn = ftell(rf); rewind(rf);
+                rb = (uint8_t *)malloc((size_t)rn);
+                if (!rb || fread(rb, 1, (size_t)rn, rf) != (size_t)rn) { free(rb); rb = NULL; }
+                fclose(rf);
+            }
+            img_image_t got;
+            int okd = rb && png_decode_mem(rb, (size_t)rn, &got, err, sizeof(err)) == 0;
+            free(rb);
+            CHECK(okd, "decode non-conformant png");
+            if (okd) {
+                CHECK(got.meta.exif && got.meta.exif_len == exif_len,
+                      "EXIF rescued from the prefixed chunk");
+                CHECK(got.meta.exif && !memcmp(got.meta.exif, exif, exif_len),
+                      "rescued bytes identical");
+                CHECK(png_write_file(&got, &opts, "testout/exif_normalised.png",
+                                     err, sizeof(err)) == 0, "re-encode");
+                img_free(&got);
+                png_meta_t om;
+                if (read_png_meta("testout/exif_normalised.png", &om) == 0)
+                    CHECK(om.exif_len == exif_len,
+                          "output conformant again (identifier dropped)");
+                else
+                    CHECK(0, "read back normalised png");
             }
         }
     }

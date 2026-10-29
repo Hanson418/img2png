@@ -29,6 +29,42 @@ static void mem_read_fn(png_structp png, png_bytep out, png_size_t count)
     r->pos += count;
 }
 
+/* Some writers put the JPEG-style "Exif\0\0" identifier inside a PNG eXIf
+ * chunk.  That is not what the PNG spec says (the chunk holds the TIFF
+ * structure directly) and libpng drops such a chunk with an "invalid" warning,
+ * so the metadata would be lost silently.  Walk the raw chunk stream - we
+ * already hold the whole file in memory - and hand the payload to
+ * img_meta_set_exif(), which tolerates the identifier. */
+static int png_raw_exif(const uint8_t *data, size_t size,
+                        uint8_t **out, size_t *outlen)
+{
+    static const uint8_t sig[8] = { 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A };
+    if (!data || size < 8 || memcmp(data, sig, 8) != 0)
+        return 0;
+
+    size_t pos = 8;
+    while (pos + 12 <= size) {
+        uint32_t len = ((uint32_t)data[pos] << 24) | ((uint32_t)data[pos + 1] << 16) |
+                       ((uint32_t)data[pos + 2] << 8) | (uint32_t)data[pos + 3];
+        const uint8_t *type = data + pos + 4;
+        if (len > size || pos + 12 + (size_t)len > size)
+            return 0;                                   /* truncated */
+        if (!memcmp(type, "eXIf", 4)) {
+            uint8_t *copy = (uint8_t *)malloc(len ? len : 1);
+            if (!copy)
+                return 0;
+            memcpy(copy, data + pos + 8, len);
+            *out = copy;
+            *outlen = len;
+            return 1;
+        }
+        if (!memcmp(type, "IDAT", 4))
+            return 0;                                   /* eXIf must precede IDAT */
+        pos += 12 + (size_t)len;
+    }
+    return 0;
+}
+
 int png_decode_mem(const uint8_t *data, size_t size, img_image_t *img,
                    char *err, size_t errlen)
 {
@@ -147,6 +183,16 @@ int png_decode_mem(const uint8_t *data, size_t size, img_image_t *img,
         png_bytep exif = NULL;
         if (png_get_eXIf_1(png, info, &exif_len, &exif) && exif && exif_len)
             img_meta_set_exif(m, exif, exif_len);
+        if (!m->exif) {
+            /* libpng rejects the non-conformant "Exif\0\0"-prefixed form, so
+             * rescue it from the raw chunk stream before giving up */
+            uint8_t *raw = NULL;
+            size_t rawlen = 0;
+            if (png_raw_exif(data, size, &raw, &rawlen)) {
+                img_meta_set_exif(m, raw, rawlen);
+                free(raw);
+            }
+        }
 
         png_charp icc_name = NULL;
         png_bytep icc = NULL;

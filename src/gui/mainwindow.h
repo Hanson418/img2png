@@ -67,6 +67,7 @@ private:
     DropPathEdit *outDirEdit_;
     QPushButton *convertBtn_;
     QPlainTextEdit *logView_;
+    QComboBox *themeBox_;
 
     /* translatable widgets */
     QLabel *labelFileList_;
@@ -78,9 +79,12 @@ private:
     QLabel *labelThreads_;
     QLabel *labelOutDir_;
     QPushButton *btnBrowse_;
+    QLabel *labelTheme_;
+    QLabel *labelLang_;
 
     int pending_;
     int failures_;
+    bool themeDark_;
 };
 
 /* one conversion task for QThreadPool */

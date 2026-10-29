@@ -2,6 +2,7 @@
 #include "convert.h"
 #include "enc/pngenc.h"
 
+#include <QApplication>
 #include <QDir>
 #include <QDirIterator>
 #include <QDragEnterEvent>
@@ -12,7 +13,10 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMimeData>
+#include <QPalette>
 #include <QSettings>
+#include <QStyle>
+#include <QStyleFactory>
 #include <QThreadPool>
 #include <QVBoxLayout>
 
@@ -25,6 +29,77 @@ QString tr2(const char *zh, const char *en)
     return g_lang == QLatin1String("en") ? QString::fromUtf8(en)
                                          : QString::fromUtf8(zh);
 }
+
+/* ---------------- light / dark theme ----------------
+ *
+ * The platform style is left untouched for the light theme; dark switches to
+ * Fusion, whose palette is honoured consistently on every platform (the native
+ * Windows style ignores most palette entries).  The style and palette the app
+ * started with are captured once so switching back is exact.
+ */
+
+namespace {
+
+QString g_defaultStyleName;
+QPalette g_defaultPalette;
+bool g_defaultsCaptured = false;
+
+void captureStyleDefaults()
+{
+    if (g_defaultsCaptured)
+        return;
+    g_defaultsCaptured = true;
+    if (QStyle *s = qApp->style())
+        g_defaultStyleName = s->objectName();
+    g_defaultPalette = qApp->palette();
+}
+
+void applyTheme(bool dark)
+{
+    captureStyleDefaults();
+
+    if (!dark) {
+        if (!g_defaultStyleName.isEmpty()) {
+            if (QStyle *s = QStyleFactory::create(g_defaultStyleName))
+                qApp->setStyle(s);
+        }
+        qApp->setPalette(g_defaultPalette);
+        return;
+    }
+
+    qApp->setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
+
+    const QColor window(53, 53, 53);
+    const QColor base(37, 37, 37);
+    const QColor alt(48, 48, 48);
+    const QColor text(224, 224, 224);
+    const QColor dim(130, 130, 130);
+    const QColor accent(42, 130, 218);
+
+    QPalette p;
+    p.setColor(QPalette::Window, window);
+    p.setColor(QPalette::WindowText, text);
+    p.setColor(QPalette::Base, base);
+    p.setColor(QPalette::AlternateBase, alt);
+    p.setColor(QPalette::ToolTipBase, base);
+    p.setColor(QPalette::ToolTipText, text);
+    p.setColor(QPalette::Text, text);
+    p.setColor(QPalette::Button, window);
+    p.setColor(QPalette::ButtonText, text);
+    p.setColor(QPalette::BrightText, Qt::white);
+    p.setColor(QPalette::Link, accent);
+    p.setColor(QPalette::Highlight, accent);
+    p.setColor(QPalette::HighlightedText, Qt::black);
+    p.setColor(QPalette::PlaceholderText, dim);
+    p.setColor(QPalette::Disabled, QPalette::Text, dim);
+    p.setColor(QPalette::Disabled, QPalette::WindowText, dim);
+    p.setColor(QPalette::Disabled, QPalette::ButtonText, dim);
+    p.setColor(QPalette::Disabled, QPalette::Highlight, alt);
+    p.setColor(QPalette::Disabled, QPalette::HighlightedText, dim);
+    qApp->setPalette(p);
+}
+
+} // namespace
 
 /* ---------------- DropPathEdit ---------------- */
 
@@ -128,6 +203,9 @@ MainWindow::MainWindow(QWidget *parent)
     if (g_lang != QLatin1String("en") && g_lang != QLatin1String("zh"))
         g_lang = QStringLiteral("zh");
 
+    themeDark_ = settings.value("theme", "light").toString() == QLatin1String("dark");
+    applyTheme(themeDark_);
+
     setAcceptDrops(true);
     resize(720, 560);
 
@@ -151,8 +229,18 @@ MainWindow::MainWindow(QWidget *parent)
     fileBtns->addWidget(btnClear_);
     fileBtns->addStretch();
 
+    /* theme selector (persisted), left of the language selector */
+    labelTheme_ = new QLabel;
+    themeBox_ = new QComboBox;
+    themeBox_->addItem(tr2("浅色", "Light"), 0);
+    themeBox_->addItem(tr2("深色", "Dark"), 1);
+    themeBox_->setCurrentIndex(themeDark_ ? 1 : 0);
+    fileBtns->addWidget(labelTheme_);
+    fileBtns->addWidget(themeBox_);
+
     /* language selector (persisted) */
-    fileBtns->addWidget(new QLabel(tr2("语言：", "Language:")));
+    labelLang_ = new QLabel;
+    fileBtns->addWidget(labelLang_);
     auto *langBox = new QComboBox;
     langBox->addItem(QStringLiteral("中文"), QStringLiteral("zh"));
     langBox->addItem(QStringLiteral("English"), QStringLiteral("en"));
@@ -231,7 +319,12 @@ MainWindow::MainWindow(QWidget *parent)
         settings.setValue("language", g_lang);
         applyTexts();
     });
-
+    connect(themeBox_, &QComboBox::currentIndexChanged, this, [this](int index) {
+        themeDark_ = (index == 1);
+        applyTheme(themeDark_);
+        QSettings settings;
+        settings.setValue("theme", themeDark_ ? "dark" : "light");
+    });
     applyTexts();
 }
 
@@ -258,6 +351,16 @@ void MainWindow::applyTexts()
                                         "Drop a folder here to use it as the output directory"));
     btnBrowse_->setText(tr2("浏览…", "Browse…"));
     convertBtn_->setText(tr2("开始转换", "Convert"));
+    labelTheme_->setText(tr2("主题：", "Theme:"));
+    labelLang_->setText(tr2("语言：", "Language:"));
+
+    /* theme combo: rebuild items (labels follow the language), keep selection */
+    themeBox_->blockSignals(true);
+    themeBox_->clear();
+    themeBox_->addItem(tr2("浅色", "Light"), 0);
+    themeBox_->addItem(tr2("深色", "Dark"), 1);
+    themeBox_->setCurrentIndex(themeDark_ ? 1 : 0);
+    themeBox_->blockSignals(false);
 
     /* filter combo: rebuild items, keep selection */
     int cur = filterBox_->currentIndex();

@@ -217,6 +217,8 @@ reachable, i.e. on `PATH` on Windows):
 - Compression level slider 0–9 (default 9), filter dropdown (default "adaptive"), thread count
 - **UI language**: 中文/English dropdown in the top right — applies instantly and is
   remembered (default: Chinese)
+- **UI theme**: Light/Dark dropdown just left of the language selector — applies instantly and
+  is remembered (default: Light)
 - "Match source bit depth strictly" (checked by default; unchecking enables auto-optimization)
   and "keep timestamps" (default checked)
 - **"Overwrite originals"** (unchecked by default):
