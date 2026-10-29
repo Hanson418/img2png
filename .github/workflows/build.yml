@@ -81,7 +81,8 @@ jobs:
 
       - name: Package (CLI + GUI with bundled Qt libs)
         run: |
-          D=img2png-${{ github.ref_name }}-linux-x64
+          V=${{ github.ref_name }}
+          D=img2png-$V-linux-x64
           mkdir -p $D/lib $D/plugins/platforms $D/plugins/imageformats
           cp build/img2png $D/
           cp build/img2png-gui $D/
@@ -103,10 +104,59 @@ jobs:
           chmod +x $D/img2png-gui.sh $D/img2png $D/img2png-gui
           tar -czf $D.tar.gz $D
 
+          # ---- Debian package: the same files, installed under /opt/img2png ----
+          VER="${V#v}"
+          case "$VER" in
+            [0-9]*) ;;
+            *) VER=0.0.0 ;;
+          esac
+          P=img2png_${VER}_amd64
+          rm -rf $P
+          mkdir -p $P/DEBIAN $P/opt/img2png $P/usr/bin $P/usr/share/applications
+          cp -a $D/. $P/opt/img2png/
+          cat > $P/usr/bin/img2png << 'EOS'
+          #!/bin/sh
+          exec /opt/img2png/img2png "$@"
+          EOS
+          cat > $P/usr/bin/img2png-gui << 'EOS'
+          #!/bin/sh
+          export LD_LIBRARY_PATH="/opt/img2png/lib:$LD_LIBRARY_PATH"
+          export QT_PLUGIN_PATH="/opt/img2png/plugins"
+          exec /opt/img2png/img2png-gui "$@"
+          EOS
+          cat > $P/usr/share/applications/img2png.desktop << 'EOS'
+          [Desktop Entry]
+          Type=Application
+          Name=img2png
+          Comment=Convert BMP/TGA/PNM/ICO/JPEG/PNG/GIF/QOI/WebP/TIFF/HEIF/AVIF images to PNG
+          Exec=img2png-gui
+          Terminal=false
+          Categories=Graphics;Utility;
+          EOS
+          cat > $P/DEBIAN/control << EOS
+          Package: img2png
+          Version: $VER
+          Section: graphics
+          Priority: optional
+          Architecture: amd64
+          Maintainer: Hanson418 <https://github.com/Hanson418>
+          Depends: libc6, libstdc++6, libgl1, libxkbcommon0, libfontconfig1, libfreetype6, libdbus-1-3, libx11-6, libxcb1, libglib2.0-0
+          Installed-Size: $(du -sk $P/opt | cut -f1)
+          Description: lossless multi-format image to PNG converter
+           Converts BMP, TGA, PNM, ICO, JPEG, PNG, GIF, QOI, WebP, TIFF, HEIF and
+           AVIF images to PNG, with a CLI and a Qt GUI. Bit depth and metadata
+           (EXIF, ICC, XMP, resolution) are preserved. Qt is bundled.
+          EOS
+          chmod 0755 $P/usr/bin/img2png $P/usr/bin/img2png-gui
+          dpkg-deb --root-owner-group --build $P
+          rm -rf $P
+
       - uses: actions/upload-artifact@v4
         with:
           name: img2png-${{ github.ref_name }}-linux-x64
-          path: img2png-${{ github.ref_name }}-linux-x64.tar.gz
+          path: |
+            img2png-${{ github.ref_name }}-linux-x64.tar.gz
+            img2png_*_amd64.deb
 
   # ------------------------------------------------------------------
   macos:
@@ -131,7 +181,8 @@ jobs:
 
       - name: Package (CLI + GUI app bundle)
         run: |
-          D=img2png-${{ github.ref_name }}-macos
+          V=${{ github.ref_name }}
+          D=img2png-$V-macos
           mkdir -p $D
           cp build/img2png $D/
           # the GUI is built as an .app bundle on macOS; deploy Qt into it
@@ -139,10 +190,24 @@ jobs:
           cp -R build/*.app $D/
           tar -czf $D.tar.gz $D
 
+          # ---- disk image with the usual drag-to-Applications layout ----
+          # unsigned, so the first launch needs right-click > Open
+          STAGE=$D-dmg
+          rm -rf $STAGE
+          mkdir -p $STAGE
+          # ditto (not cp) keeps the .app bundle's symlinks and attributes intact
+          ditto "$D" "$STAGE"
+          ln -s /Applications $STAGE/Applications
+          hdiutil create -volname "img2png $V" -srcfolder "$STAGE" \
+            -ov -format UDZO "$D.dmg"
+          rm -rf $STAGE
+
       - uses: actions/upload-artifact@v4
         with:
           name: img2png-${{ github.ref_name }}-macos
-          path: img2png-${{ github.ref_name }}-macos.tar.gz
+          path: |
+            img2png-${{ github.ref_name }}-macos.tar.gz
+            img2png-${{ github.ref_name }}-macos.dmg
 
   # ------------------------------------------------------------------
   release:
@@ -166,3 +231,5 @@ jobs:
           files: |
             dist/*.zip
             dist/*.tar.gz
+            dist/*.deb
+            dist/*.dmg
