@@ -43,21 +43,27 @@ jobs:
 
       - name: Deploy Qt runtime
         run: |
-          mkdir -p pkg/img2png-v${{ github.ref_name }}
-          cp build/img2png.exe build/img2png-gui.exe pkg/img2png-v${{ github.ref_name }}/
+          N=img2png-${{ github.ref_name }}-windows-x64
+          mkdir -p pkg/$N
+          cp build/img2png.exe build/img2png-gui.exe pkg/$N/
           WDEP=$(command -v windeployqt || command -v windeployqt6)
           "$WDEP" --release --no-translations \
-            --no-system-d3d-compiler --no-opengl-sw \
-            "pkg/img2png-v${{ github.ref_name }}/img2png-gui.exe"
-          rm -rf pkg/img2png-v${{ github.ref_name }}/tls \
-                 pkg/img2png-v${{ github.ref_name }}/networkinformation \
-                 pkg/img2png-v${{ github.ref_name }}/generic \
-                 pkg/img2png-v${{ github.ref_name }}/Qt6Network.dll
+            --no-system-d3d-compiler --no-opengl-sw "pkg/$N/img2png-gui.exe"
+          rm -rf pkg/$N/tls pkg/$N/networkinformation \
+                 pkg/$N/generic pkg/$N/Qt6Network.dll
+
+      # zip here rather than in the release job: the archive is then just
+      # another artifact file, like the tarballs the other jobs upload
+      - name: Package (zip)
+        shell: pwsh
+        run: |
+          $n = "img2png-${{ github.ref_name }}-windows-x64"
+          Compress-Archive -Path "pkg/$n" -DestinationPath "$n.zip" -Force
 
       - uses: actions/upload-artifact@v4
         with:
           name: img2png-${{ github.ref_name }}-windows-x64
-          path: pkg/
+          path: img2png-${{ github.ref_name }}-windows-x64.zip
 
   # ------------------------------------------------------------------
   linux:
@@ -219,12 +225,6 @@ jobs:
         with:
           merge-multiple: true
           path: dist
-
-      - name: Re-zip windows package
-        run: |
-          cd dist
-          d=$(find . -maxdepth 1 -type d -name '*windows*')
-          (cd "$d" && zip -r ../$(basename $d).zip .)
 
       - uses: softprops/action-gh-release@v2
         with:
