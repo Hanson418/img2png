@@ -51,6 +51,11 @@ jobs:
             --no-system-d3d-compiler --no-opengl-sw "pkg/$N/img2png-gui.exe"
           rm -rf pkg/$N/tls pkg/$N/networkinformation \
                  pkg/$N/generic pkg/$N/Qt6Network.dll
+          # the exes link these dynamically, so ship them - otherwise the
+          # package only starts on machines that already have MSYS2/MinGW
+          for d in libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll; do
+            cp "/mingw64/bin/$d" "pkg/$N/"
+          done
 
       # zip here rather than in the release job: the archive is then just
       # another artifact file, like the tarballs the other jobs upload
@@ -92,7 +97,7 @@ jobs:
           mkdir -p $D/lib $D/plugins/platforms $D/plugins/imageformats
           cp build/img2png $D/
           cp build/img2png-gui $D/
-          # bundle the Qt shared libraries the GUI links against
+          # bundle the Qt libraries the GUI links against ...
           for lib in $(ldd build/img2png-gui | grep -oE '/[^ ]*libQt6[^ ]*\.so[^ ]*'); do
             cp "$lib" $D/lib/
           done
@@ -100,6 +105,30 @@ jobs:
           for p in /usr/lib/x86_64-linux-gnu/qt6/plugins/imageformats/*.so; do
             [ -e "$p" ] && cp "$p" $D/plugins/imageformats/
           done
+
+          # ... and their own dependencies.  libicu's soname is versioned
+          # (libicuuc.so.70 on 22.04, .74 on 24.04), so relying on the distro
+          # copy breaks on any other release.  The graphics/driver stack is
+          # skipped on purpose: bundling it would couple us to Mesa, and the
+          # .deb declares those instead.
+          for round in 1 2 3; do
+            before=$(ls $D/lib | wc -l)
+            for target in $D/img2png $D/img2png-gui $D/lib/*.so* $D/plugins/*/*.so; do
+              for so in $(ldd "$target" 2>/dev/null | awk '/=>/ {print $3}' | grep '^/'); do
+                base=$(basename "$so")
+                case "$base" in
+                  libc.so.*|libm.so.*|libpthread.so.*|libdl.so.*|librt.so.*|ld-linux*) continue ;;
+                  libstdc++.so.*|libgcc_s.so.*) continue ;;
+                  libGL*.so.*|libEGL*.so.*|libGLX*.so.*|libOpenGL*.so.*) continue ;;
+                  libX*.so.*|libxcb*.so.*|libxkbcommon*.so.*) continue ;;
+                  libdrm*.so.*|libgbm*.so.*) continue ;;
+                esac
+                [ -e "$D/lib/$base" ] || cp "$so" "$D/lib/" 2>/dev/null || true
+              done
+            done
+            [ "$before" = "$(ls $D/lib | wc -l)" ] && break
+          done
+
           cat > $D/img2png-gui.sh << 'EOS'
           #!/bin/sh
           DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -139,6 +168,20 @@ jobs:
           Terminal=false
           Categories=Graphics;Utility;
           EOS
+
+          # Depends: ask dpkg who owns each shared object we still need from the
+          # system (anything under /opt/img2png/lib is shipped by us)
+          : > /tmp/deps.txt
+          for target in $P/opt/img2png/img2png $P/opt/img2png/img2png-gui \
+                        $P/opt/img2png/lib/*.so* $P/opt/img2png/plugins/*/*.so; do
+            for so in $(ldd "$target" 2>/dev/null | awk '/=>/ {print $3}' | grep '^/'); do
+              [ -e "$P/opt/img2png/lib/$(basename "$so")" ] && continue
+              dpkg -S "$so" 2>/dev/null | head -1 | cut -d: -f1 >> /tmp/deps.txt
+            done
+          done
+          deps=$(sort -u /tmp/deps.txt | grep -v '^$' | paste -sd, - | sed 's/,/, /g')
+          [ -n "$deps" ] || deps=libc6
+
           cat > $P/DEBIAN/control << EOS
           Package: img2png
           Version: $VER
@@ -146,12 +189,13 @@ jobs:
           Priority: optional
           Architecture: amd64
           Maintainer: Hanson418 <https://github.com/Hanson418>
-          Depends: libc6, libstdc++6, libgl1, libxkbcommon0, libfontconfig1, libfreetype6, libdbus-1-3, libx11-6, libxcb1, libglib2.0-0
+          Depends: $deps
           Installed-Size: $(du -sk $P/opt | cut -f1)
           Description: lossless multi-format image to PNG converter
            Converts BMP, TGA, PNM, ICO, JPEG, PNG, GIF, QOI, WebP, TIFF, HEIF and
-           AVIF images to PNG, with a CLI and a Qt GUI. Bit depth and metadata
-           (EXIF, ICC, XMP, resolution) are preserved. Qt is bundled.
+           AVIF images to PNG, with a CLI and a Qt GUI.  Bit depth and metadata
+           (EXIF, ICC, XMP, resolution) are preserved.  Qt and the versioned
+           runtime libraries are bundled under /opt/img2png.
           EOS
           chmod 0755 $P/usr/bin/img2png $P/usr/bin/img2png-gui
           dpkg-deb --root-owner-group --build $P
