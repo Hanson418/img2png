@@ -341,11 +341,13 @@ void MainWindow::applyTexts()
     labelLevel_->setText(tr2("压缩级别(0-9):", "Compression level (0-9):"));
     labelFilter_->setText(tr2("滤镜:", "Filter:"));
     labelThreads_->setText(tr2("线程数:", "Threads:"));
-    strictDepthBox_->setText(tr2("严格匹配源图位深（不勾选则自动优化：去无用alpha/灰度检测）",
-                                 "Match source bit depth strictly (uncheck to auto-optimize: drop useless alpha / gray detection)"));
+    strictDepthBox_->setText(tr2("严格匹配源图位深", "Match source bit depth strictly"));
+    strictDepthBox_->setToolTip(tr2("不勾选则自动优化：去掉完全无用的 alpha 通道、纯灰度图降为 GRAY",
+                                    "Unchecking enables auto-optimization: drop a fully opaque alpha channel and collapse pure-grayscale RGB to GRAY"));
     keepTimeBox_->setText(tr2("输出文件时间戳与输入一致", "Keep input timestamps on output"));
-    overwriteBox_->setText(tr2("覆盖原文件（输出与输入相同时原地覆盖；同目录的非PNG转换成功后删除原文件）",
-                               "Overwrite originals (in-place when output==input; same-folder non-PNG sources are deleted after conversion)"));
+    overwriteBox_->setText(tr2("覆盖原文件", "Overwrite originals"));
+    overwriteBox_->setToolTip(tr2("输出与输入相同时原地覆盖；勾选后同目录的非 PNG 文件转换成功会删除原文件，由同名 .png 取代",
+                                  "In-place when output == input; when checked, a same-folder non-PNG source is deleted after a successful conversion and replaced by the same-name .png"));
     labelOutDir_->setText(tr2("输出目录（留空 = PNG原地/同名生成）:", "Output directory (empty = in-place / next to input):"));
     outDirEdit_->setPlaceholderText(tr2("可拖拽文件夹到此框作为输出目录",
                                         "Drop a folder here to use it as the output directory"));

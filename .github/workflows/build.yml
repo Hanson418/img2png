@@ -226,23 +226,10 @@ jobs:
           merge-multiple: true
           path: dist
 
-      # The release body is RELEASE_NOTES_<tag>.md when the repository has one
-      # for this tag, otherwise a one-line fallback (a tag without notes must
-      # not block publishing).
-      - name: Prepare release body
-        run: |
-          f="RELEASE_NOTES_${{ github.ref_name }}.md"
-          if [ -f "$f" ]; then
-            cp "$f" "$RUNNER_TEMP/body.md"
-            echo "using $f ($(wc -c < "$f") bytes)"
-          else
-            echo "Release ${{ github.ref_name }}" > "$RUNNER_TEMP/body.md"
-            echo "$f not found, using the fallback body"
-          fi
-
+      # The release body is left to the maintainer: release notes are written
+      # locally (RELEASE_NOTES_<tag>.md) and pasted in by hand.
       - uses: softprops/action-gh-release@v2
         with:
-          body_path: ${{ runner.temp }}/body.md
           files: |
             dist/*.zip
             dist/*.tar.gz
