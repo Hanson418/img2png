@@ -14,6 +14,7 @@
 #include "image.h"
 #include "dec/decode.h"
 #include "enc/pngenc.h"
+#include "convert.h"
 #include "util/filetime.h"
 #include "util/pngerr.h"
 #include <gif_lib.h>
@@ -1057,16 +1058,16 @@ static uint8_t pal_gif_b(int i) { static const uint8_t v[4] = {0,0,255,30};  ret
 
 static uint64_t file_time_stamp(const char *path, int create)
 {
-    uint8_t c[16] = {0}, m[16] = {0};
-    if (get_file_times(path, c, m) != 0)
+    img_timeblob_t c, m;
+    if (get_file_times(path, &c, &m) != 0)
         return 0;
     if (create) {
         uint64_t v;
-        memcpy(&v, c, 8);
+        memcpy(&v, c.bytes, 8);
         return v;
     }
     uint64_t v;
-    memcpy(&v, m, 8);
+    memcpy(&v, m.bytes, 8);
     return v;
 }
 
@@ -1311,10 +1312,12 @@ pgm_done:;
             /* raw payload 1e17: a very old timestamp on Windows (FILETIME),
              * harmless on POSIX where only mtime is applied */
             uint64_t old_v = 100000000000000000ULL;
-            uint8_t c[16] = {0}, m[16] = {0};
-            memcpy(c, &old_v, 8);
-            memcpy(m, &old_v, 8);
-            set_file_times("testout/ts_in.bin", c, m);
+            img_timeblob_t c, m;
+            memset(&c, 0, sizeof c);
+            memset(&m, 0, sizeof m);
+            memcpy(c.bytes, &old_v, 8);
+            memcpy(m.bytes, &old_v, 8);
+            set_file_times("testout/ts_in.bin", &c, &m);
         }
         CHECK(copy_file_times("testout/ts_in.bin", "testout/ts_out.bin") == 0, "copy_file_times");
         uint64_t c_in = file_time_stamp("testout/ts_in.bin", 1);
@@ -1323,6 +1326,27 @@ pgm_done:;
         uint64_t m_out = file_time_stamp("testout/ts_out.bin", 0);
         CHECK(c_in == c_out && c_in != 0, "creation time matches");
         CHECK(m_in == m_out && m_in != 0, "modification time matches");
+    }
+
+    /* --- the full convert path, as the GUI calls it --- */
+    printf("img2png_convert end-to-end (timestamps included):\n");
+    {
+        CHECK(gen_bmp24("testout/cv_in.bmp", 9, 5) == 0, "generate bmp");
+        png_opts_t o;
+        o.level = 9;
+        o.filter = PNGF_AUTO;
+        o.auto_optimize = 0;
+        img2png_result_t res;
+        int rc = img2png_convert("testout/cv_in.bmp", "testout/cv_out.png",
+                                 &o, 1 /* keep time */, &res);
+        CHECK(rc == 0, "convert bmp -> png");
+        CHECK(res.ok && res.out_w == 9 && res.out_h == 5, "result geometry");
+        CHECK(res.out_size > 0 && res.out_color == IMG_RGB, "output written, RGB");
+        /* this path used to overflow its timestamp buffers */
+        uint64_t mc_in = file_time_stamp("testout/cv_in.bmp", 0);
+        uint64_t mc_out = file_time_stamp("testout/cv_out.png", 0);
+        CHECK(mc_in != 0 && mc_in == mc_out,
+              "timestamps carried through img2png_convert");
     }
 
     /* --- filter modes all produce readable output --- */

@@ -26,15 +26,16 @@ int utimensat(int dirfd, const char *pathname, const struct timespec *times, int
 
 int copy_file_times(const char *src_path, const char *dst_path)
 {
-    uint8_t ctime[16] = {0}, mtime[16] = {0};
-    if (get_file_times(src_path, ctime, mtime) != 0)
+    img_timeblob_t ctime, mtime;
+    if (get_file_times(src_path, &ctime, &mtime) != 0)
         return -1;
-    return set_file_times(dst_path, ctime, mtime);
+    return set_file_times(dst_path, &ctime, &mtime);
 }
 
 #if defined(_WIN32) && !defined(IMG2PNG_FORCE_POSIX)
 
-int get_file_times(const char *path, void *ctime_out, void *mtime_out)
+int get_file_times(const char *path, img_timeblob_t *ctime_out,
+                   img_timeblob_t *mtime_out)
 {
     void *h = img_open_read_attrs(path);
     if (!h)
@@ -44,21 +45,22 @@ int get_file_times(const char *path, void *ctime_out, void *mtime_out)
     img_close_handle(h);
     if (!ok)
         return -1;
-    memset(ctime_out, 0, 16);
-    memset(mtime_out, 0, 16);
-    memcpy(ctime_out, &c, 8);
-    memcpy(mtime_out, &m, 8);
+    memset(ctime_out->bytes, 0, sizeof ctime_out->bytes);
+    memset(mtime_out->bytes, 0, sizeof mtime_out->bytes);
+    memcpy(ctime_out->bytes, &c, 8);
+    memcpy(mtime_out->bytes, &m, 8);
     return 0;
 }
 
-int set_file_times(const char *path, const void *ctime, const void *mtime)
+int set_file_times(const char *path, const img_timeblob_t *ctime,
+                   const img_timeblob_t *mtime)
 {
     void *h = img_open_write_attrs(path);
     if (!h)
         return -1;
     FILETIME ct, mt;
-    memcpy(&ct, ctime, 8);
-    memcpy(&mt, mtime, 8);
+    memcpy(&ct, ctime->bytes, 8);
+    memcpy(&mt, mtime->bytes, 8);
     BOOL ok = SetFileTime((HANDLE)h, &ct, NULL, &mt);
     img_close_handle(h);
     return ok ? 0 : -1;
@@ -85,15 +87,16 @@ static void unpack_timespec(const uint8_t *in, struct timespec *ts)
     ts->tv_nsec = (long)ns;
 }
 
-int get_file_times(const char *path, void *ctime_out, void *mtime_out)
+int get_file_times(const char *path, img_timeblob_t *ctime_out,
+                   img_timeblob_t *mtime_out)
 {
     struct stat st;
     if (stat(path, &st) != 0)
         return -1;
 #if defined(__APPLE__)
-    pack_timespec(ctime_out, st.st_birthtime, 0);
+    pack_timespec(ctime_out->bytes, st.st_birthtime, 0);
 #else
-    pack_timespec(ctime_out, st.st_mtime, 0);
+    pack_timespec(ctime_out->bytes, st.st_mtime, 0);
 #endif
     long nsec = 0;
 #if defined(__APPLE__)
@@ -101,18 +104,19 @@ int get_file_times(const char *path, void *ctime_out, void *mtime_out)
 #elif defined(__linux__)
     nsec = (long)st.st_mtim.tv_nsec;
 #endif
-    pack_timespec(mtime_out, st.st_mtime, nsec);
+    pack_timespec(mtime_out->bytes, st.st_mtime, nsec);
     return 0;
 }
 
-int set_file_times(const char *path, const void *ctime, const void *mtime)
+int set_file_times(const char *path, const img_timeblob_t *ctime,
+                   const img_timeblob_t *mtime)
 {
     (void)ctime;    /* POSIX has no portable way to set the creation time */
     struct timespec times[2];
     times[0].tv_sec = 0;            /* atime: leave unchanged? utimensat with
                                        UTIME_OMIT keeps it */
     times[0].tv_nsec = UTIME_OMIT;
-    unpack_timespec(mtime, &times[1]);
+    unpack_timespec(mtime->bytes, &times[1]);
     return utimensat(AT_FDCWD, path, times, 0) == 0 ? 0 : -1;
 }
 

@@ -126,8 +126,8 @@ int img2png_convert(const char *in_path, const char *out_path,
     double t0 = img_now_sec(), t1;
 
     /* save the source's times before any (possibly in-place) write */
-    uint8_t ctime[8] = {0}, mtime[8] = {0};
-    int have_times = keep_time && get_file_times(in_path, ctime, mtime) == 0;
+    img_timeblob_t ctime, mtime;
+    int have_times = keep_time && get_file_times(in_path, &ctime, &mtime) == 0;
     unsigned long long in_size = file_size(in_path);
 
     FILE *f = img_fopen_read(in_path);
@@ -158,7 +158,7 @@ int img2png_convert(const char *in_path, const char *out_path,
             if (rc != 0)
                 return -1;
             if (have_times)
-                set_file_times(out_path, ctime, mtime);
+                set_file_times(out_path, &ctime, &mtime);
             t1 = img_now_sec();
             result->secs = t1 - t0;
             result->in_size = in_size;
@@ -253,7 +253,7 @@ int img2png_convert(const char *in_path, const char *out_path,
         return -1;
 
     if (have_times)
-        set_file_times(out_path, ctime, mtime);
+        set_file_times(out_path, &ctime, &mtime);
 
     t1 = img_now_sec();
     result->secs = t1 - t0;
