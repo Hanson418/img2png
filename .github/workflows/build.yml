@@ -207,13 +207,16 @@ jobs:
           chmod 0755 $P/usr/bin/img2png $P/usr/bin/img2png-gui
           dpkg-deb --root-owner-group --build $P
           rm -rf $P
+          # a Debian version may not start with "v", so dpkg-deb names the file
+          # img2png_<ver>_amd64.deb; rename it to match the other assets
+          mv "img2png_${VER}_amd64.deb" "img2png-v${VER}-amd64.deb"
 
       - uses: actions/upload-artifact@v4
         with:
           name: img2png-${{ github.ref_name }}-linux-x64
           path: |
             img2png-${{ github.ref_name }}-linux-x64.tar.gz
-            img2png_*_amd64.deb
+            img2png-*-amd64.deb
 
   # ------------------------------------------------------------------
   macos:
