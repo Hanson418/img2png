@@ -114,7 +114,7 @@ jobs:
           for round in 1 2 3; do
             before=$(ls $D/lib | wc -l)
             for target in $D/img2png $D/img2png-gui $D/lib/*.so* $D/plugins/*/*.so; do
-              for so in $(ldd "$target" 2>/dev/null | awk '/=>/ {print $3}' | grep '^/'); do
+              for so in $(LD_LIBRARY_PATH=$D/lib ldd "$target" 2>/dev/null | awk '/=>/ {print $3}' | grep '^/'); do
                 base=$(basename "$so")
                 case "$base" in
                   libc.so.*|libm.so.*|libpthread.so.*|libdl.so.*|librt.so.*|ld-linux*) continue ;;
@@ -174,9 +174,16 @@ jobs:
           : > /tmp/deps.txt
           for target in $P/opt/img2png/img2png $P/opt/img2png/img2png-gui \
                         $P/opt/img2png/lib/*.so* $P/opt/img2png/plugins/*/*.so; do
-            for so in $(ldd "$target" 2>/dev/null | awk '/=>/ {print $3}' | grep '^/'); do
+            # LD_LIBRARY_PATH so ldd can resolve the bundled Qt libs; without
+            # it the scan produces no list at all for the plugins
+            for so in $(LD_LIBRARY_PATH=$P/opt/img2png/lib ldd "$target" 2>/dev/null \
+                        | awk '/=>/ {print $3}' | grep '^/'); do
               [ -e "$P/opt/img2png/lib/$(basename "$so")" ] && continue
-              dpkg -S "$so" 2>/dev/null | head -1 | cut -d: -f1 >> /tmp/deps.txt
+              pkg=$(dpkg -S "$so" 2>/dev/null | head -1 | cut -d: -f1)
+              [ -n "$pkg" ] || pkg=$(dpkg -S "$(readlink -f "$so")" 2>/dev/null | head -1 | cut -d: -f1)
+              # ldd reports /lib/... while dpkg lists /usr/lib/... on merged-usr systems
+              [ -n "$pkg" ] || pkg=$(dpkg -S "/usr$so" 2>/dev/null | head -1 | cut -d: -f1)
+              [ -n "$pkg" ] && echo "$pkg" >> /tmp/deps.txt
             done
           done
           deps=$(sort -u /tmp/deps.txt | grep -v '^$' | paste -sd, - | sed 's/,/, /g')
